@@ -98,7 +98,7 @@ void setup_sock(void){
     }
 
     /* bind */
-    if(bind_sock(sockfd, "eth2") == -1){
+    if(bind_sock(sockfd, "eth0") == -1){
         exit(-1);
     }
 
