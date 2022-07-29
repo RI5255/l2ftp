@@ -1,5 +1,6 @@
 *
 !*/
 !*.*
+!Makefile
 check.md5
 *.o
