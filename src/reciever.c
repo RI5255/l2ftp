@@ -30,7 +30,7 @@
 char fpath[FPATH_LEN] = "./hanako/data/data"; 
 void *fdata; /* pointer to file data */
 int fd;  /* file fiscriptor */
-struct id_queue send_q;
+struct id_queue id_q;
 struct packet_queue pkt_q;
 
 uint8_t dest[ETH_ADDRLEN] = {0x00, 0x15, 0x5d, 0xf8, 0x36, 0x7e};
@@ -74,7 +74,7 @@ void master(void){
     }
 }
 
-void pkt_handler(void){
+void* reciever(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
     /* control table */
@@ -102,7 +102,7 @@ void pkt_handler(void){
         table[segid] = RECIEVED;
 
         if(segid != id_req){
-            enq_id(&send_q, id_req);
+            enq_id(&id_q, id_req);
             goto end;
         }
 
@@ -117,7 +117,6 @@ void pkt_handler(void){
         head->tp_status = TP_STATUS_KERNEL;
 
     }
-    printf("file transmission complited!\n");
     /* ファイルデータを保存して終了 */
     fd = open(fpath, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR);
     if(fd == -1){
@@ -140,7 +139,7 @@ void sender(void){
     
     printf("[Sender] I will start a job\n");
     while(1){
-        deq_id(&send_q, &id_req);
+        deq_id(&id_q, &id_req);
         head = handle_txring(sockfd);
         head->tp_len = L2FTP_HDRLEN;
 
@@ -163,7 +162,6 @@ void sender(void){
         printf("[Sender] sent request %hu\n", id_req);
         if(id_req == FIN) break;
     }
-    printf("[Sender] File transmission complited!\n");
 }
 
 /* free up resources */ 
@@ -179,8 +177,9 @@ void cleanup(void){
 }
 
 int main(void){
-    pthread_t m, pkt_h, s;
+    pthread_t m, r, s;
     uint8_t fno = 0;
+    int retvalue;
 
     /* set params */
     TBLOCK_NO = 1;
@@ -198,9 +197,9 @@ int main(void){
         return -1;
     }
     init_fdata(fno);
-    pthread_mutex_init(&send_q.mutex, NULL);
-    pthread_cond_init(&send_q.not_full, NULL);
-    pthread_cond_init(&send_q.not_empty, NULL);
+    pthread_mutex_init(&id_q.mutex, NULL);
+    pthread_cond_init(&id_q.not_full, NULL);
+    pthread_cond_init(&id_q.not_empty, NULL);
     pthread_mutex_init(&pkt_q.mutex, NULL);
     pthread_cond_init(&pkt_q.not_full, NULL);
     pthread_cond_init(&pkt_q.not_empty, NULL);
@@ -210,7 +209,7 @@ int main(void){
         perror("pthread_create");
         return EXIT_FAILURE;
     }
-    if(pthread_create(&pkt_h, NULL, (void *(*)(void *))pkt_handler, NULL) != 0){
+    if(pthread_create(&r, NULL, (void *(*)(void *))reciever, NULL) != 0){
         perror("pthread_create");
         return EXIT_FAILURE;
     }
@@ -218,7 +217,12 @@ int main(void){
         perror("pthread_create");
         return EXIT_FAILURE;
     }
-    pthread_join(pkt_h,NULL);
+    pthread_join(r, (void*)&retvalue);
+    if(retvalue != 0){
+        printf("something went wrong\n");
+        return -1;
+    }
+    printf("file transmission complited!\n");
     cleanup();
     destroy_sock();
     return EXIT_SUCCESS;

@@ -29,7 +29,7 @@
 char fpath[FPATH_LEN] = "./taro/data/data"; 
 void *fdata; /* pointer to file data */
 int fd;  /* file fiscriptor */
-struct id_queue id_queue;
+struct id_queue id_q;
 
 #define FRAME_NO 69 /* 69 frame per 1 file */
 #define RECIEVED 0x90
@@ -85,7 +85,7 @@ void sender(void){
     }
     
     while(1){
-        deq_id(&id_queue, &id_req);
+        deq_id(&id_q, &id_req);
         if(id_req == FIN) break;
         datasize =  id_req==68? 400 : MTU;
         head = handle_txring(sockfd);
@@ -139,7 +139,7 @@ void reciever(void){
         hdr = (struct l2ftp_hdr*)((uint8_t*)head + head->tp_net);
         id_req = hdr->segid;
         printf("[Sender] requested id: %hu\n", id_req);
-        enq_id(&id_queue, id_req);
+        enq_id(&id_q, id_req);
         if(id_req == FIN) break;
         /* updata flag */
         head->tp_status = TP_STATUS_KERNEL;
@@ -151,12 +151,6 @@ void reciever(void){
 
 /* free up resources */ 
 void cleanup(void){
-    /* close socket */
-    if(close(sockfd) == -1){
-        perror("close");
-        exit(EXIT_FAILURE);
-    }
-
     /* close file discriptor */
     if(close(fd) == -1){
         perror("close");
@@ -168,11 +162,13 @@ void cleanup(void){
         perror("munmap");
         exit(EXIT_FAILURE);
     }
+    /* queueの変数はサボる。(再利用することはないので問題ない。はず。)*/
 }
 
 int main(void){
     pthread_t r, s;
     uint8_t fno=0;
+    int retvalue;
     
     /* set params */
     TBLOCK_NO = 1;
@@ -190,9 +186,9 @@ int main(void){
         return -1;
     }
     init_fdata(fno);
-    pthread_mutex_init(&id_queue.mutex, NULL);
-    pthread_cond_init(&id_queue.not_full, NULL);
-    pthread_cond_init(&id_queue.not_empty, NULL);
+    pthread_mutex_init(&id_q.mutex, NULL);
+    pthread_cond_init(&id_q.not_full, NULL);
+    pthread_cond_init(&id_q.not_empty, NULL);
     setup_sock();
 
     /* create threads */
@@ -205,7 +201,13 @@ int main(void){
         return EXIT_FAILURE;
     }
 
-    pthread_join(s,NULL);
+    pthread_join(r, (void*)&retvalue);
+    if(retvalue != 0){
+        printf("something went wrong\n");
+        return -1;
+    }
+    printf("file transmission complited!\n");
     cleanup();
+    destroy_sock();
     return EXIT_SUCCESS;
 }
