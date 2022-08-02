@@ -48,6 +48,7 @@ void init_fdata(uint8_t fno){
     }
 }
 
+/* frameを受信してqueueに入れる */
 void master(void){
     struct tpacket_hdr *head;
     struct pollfd pfd;
@@ -55,9 +56,8 @@ void master(void){
     printf("[Master] I will start a job\n");
     while(1){
         head = (struct tpacket_hdr*)((uint8_t*)rxring + RFRAME_SIZE * rxring_offset);
-
         /* TP_STATUS_KERNEL means threre is no redable data */
-        if(head->tp_status == TP_STATUS_KERNEL){
+        while(head->tp_status == TP_STATUS_KERNEL){
             /* fill struct to prepare poll */
             pfd.fd = sockfd;
             pfd.events = POLLIN;
@@ -67,6 +67,7 @@ void master(void){
                 exit(EXIT_FAILURE);
             }        
         }  
+
         enq_pkt(&pkt_q, head);
 
         /* update offset. if offset == RFRAME_NO, set 0*/
@@ -74,50 +75,76 @@ void master(void){
     }
 }
 
+/* ファイルデータを受信。ackの算出はidを保存すれば後で出来る。rx ringを早く解放したいのでidの計算は分離する。仮説。受信処理が早すぎてdeqした後、statusを更新するまでの間に再びenqされてしまう説*/
 void* reciever(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
-    /* control table */
-    uint8_t table[FRAME_NO] = {};
-    uint8_t id_req = 0, segid;
+    uint8_t segid;
     unsigned int datasize; 
+    uint8_t table[FRAME_NO] = {}; /* control table */
 
-    printf("[Pkt_Handler] I will start a job\n");
+    printf("[Reciever] I will start a job\n");
 
-    /* id_reqが更新できるのは連続したデータが届いている間。*/
     while(1){
         deq_pkt(&pkt_q, &head);
         hdr = (struct l2ftp_hdr*)((uint8_t*)head + head->tp_mac);
-      
         datasize = head->tp_snaplen - L2FTP_HDRLEN;
         segid = hdr->segid;   
         printf("[Reciver] recieved id: %hu size; %d\n", segid, datasize);
 
-        /* stege2以降に有効。 */
+        /* 受信済みか調べる */    
         if(table[segid] == RECIEVED)  
             goto end;
 
-        /* memcpy file data */
+        /* ファイルデータをコピーして受信完了をマーク */
         memcpy((uint8_t*)fdata + MTU * segid, (uint8_t*)hdr + L2FTP_HDRLEN, datasize);
         table[segid] = RECIEVED;
 
-        if(segid != id_req){
-            enq_id(&id_q, id_req);
-            goto end;
-        }
+        /* idをキューに入れる */
+        enq_id(&id_q, segid);
 
-        /* 想定通りのidを受信 */
-        id_req++;
-        while(table[id_req] == RECIEVED) id_req++;
-
-        if(id_req == FIN) break;
- 
         end:
-        /* updata flag */
+        /* updata status */
         head->tp_status = TP_STATUS_KERNEL;
-
     }
-    /* ファイルデータを保存して終了 */
+}
+
+/* idをもとに要求する */
+void* sender(void){
+    struct tpacket_hdr *head;
+    struct l2ftp_hdr *hdr;
+    uint8_t id_req;
+    int i;
+    
+    printf("[Sender] I will start a job\n");
+    while(1){
+        deq_id(&id_q, &id_req);
+        if(id_req == 68){
+            head = handle_txring(sockfd);
+            head->tp_len = L2FTP_HDRLEN;
+
+            /* build l2ftp_hdr */
+            hdr = (struct l2ftp_hdr*)((uint8_t*)head + OFF);
+            for(i=0; i<ETH_ADDRLEN; i++){
+                hdr->dest[i] = dest[i];
+            }
+            hdr->fid = 0;
+            hdr->segid = 69;
+            hdr->proto = htons(0x88b5);
+            
+            /* updata status */
+            head->tp_status = TP_STATUS_SEND_REQUEST;
+
+            /* send frame */
+            if(send(sockfd, NULL, 0, 0) == -1){
+                perror("send");
+                exit(-1);
+            }
+            printf("[Sender] sent request %hu\n", 69);
+            break;
+        }
+    }
+     /* ファイルデータを保存して終了 */
     fd = open(fpath, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR);
     if(fd == -1){
         perror("open");
@@ -128,40 +155,6 @@ void* reciever(void){
         pthread_exit((void*)-1);
     }
     pthread_exit((void*)0);
-}
-
-/* handle captured frame */
-void sender(void){
-    struct tpacket_hdr *head;
-    struct l2ftp_hdr *hdr;
-    uint8_t id_req;
-    int i;
-    
-    printf("[Sender] I will start a job\n");
-    while(1){
-        deq_id(&id_q, &id_req);
-        head = handle_txring(sockfd);
-        head->tp_len = L2FTP_HDRLEN;
-
-        /* build l2ftp_hdr */
-        hdr = (struct l2ftp_hdr*)&head + OFF;
-        for(i=0; i<ETH_ADDRLEN; i++){
-            hdr->dest[i] = dest[i];
-        }
-        hdr->fid = 0;
-        hdr->segid = htons(id_req);
-        
-        /* updata status */
-        head->tp_status = TP_STATUS_SEND_REQUEST;
-
-        /* send frame */
-        if(send(sockfd, NULL, 0, MSG_DONTWAIT) == -1){
-            perror("send");
-            exit(-1);
-        }
-        printf("[Sender] sent request %hu\n", id_req);
-        if(id_req == FIN) break;
-    }
 }
 
 /* free up resources */ 
@@ -217,7 +210,7 @@ int main(void){
         perror("pthread_create");
         return EXIT_FAILURE;
     }
-    pthread_join(r, (void*)&retvalue);
+    pthread_join(s, (void*)&retvalue);
     if(retvalue != 0){
         printf("something went wrong\n");
         return -1;

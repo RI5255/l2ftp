@@ -17,6 +17,7 @@
 #include <pthread.h>
 
 #include "id_queue.h"
+#include "packet_queue.h"
 #include "pktsock.h"
 #include "global.h"
 #include "l2ftp.h"
@@ -30,6 +31,7 @@ char fpath[FPATH_LEN] = "./taro/data/data";
 void *fdata; /* pointer to file data */
 int fd;  /* file fiscriptor */
 struct id_queue id_q;
+struct packet_queue pkt_q;
 
 #define FRAME_NO 69 /* 69 frame per 1 file */
 #define RECIEVED 0x90
@@ -49,6 +51,34 @@ void init_fdata(uint8_t fno){
     }
 }
 
+/* frameを受信してqueueに入れる */
+void master(void){
+    struct tpacket_hdr *head;
+    struct pollfd pfd;
+
+    printf("[Master] I will start a job\n");
+    while(1){
+        head = (struct tpacket_hdr*)((uint8_t*)rxring + RFRAME_SIZE * rxring_offset);
+
+        /* TP_STATUS_KERNEL means threre is no redable data */
+        while(head->tp_status == TP_STATUS_KERNEL){
+            /* fill struct to prepare poll */
+            pfd.fd = sockfd;
+            pfd.events = POLLIN;
+            pfd.revents =0;
+            if(poll(&pfd, 1, -1) == -1){
+                perror("poll");
+                exit(EXIT_FAILURE);
+            }        
+        }  
+
+        enq_pkt(&pkt_q, head);
+
+        /* update offset. if offset == RFRAME_NO, set 0*/
+        rxring_offset = (rxring_offset+1) % RFRAME_NO;
+    }
+}
+
 /* send file data */
 void sender(void){
     struct tpacket_hdr *head;
@@ -57,6 +87,8 @@ void sender(void){
     unsigned int datasize;
 
     printf("[Sender] I will start a job\n");
+
+    /* 全てのデータを送信 */
     for(i=0; i<FRAME_NO; i++){
         /* send fdata */
         datasize =  i==68? 400 : MTU;
@@ -84,9 +116,9 @@ void sender(void){
         exit(EXIT_FAILURE);
     }
     
+    /* 要求されたidに該当するデータを送信 */
     while(1){
         deq_id(&id_q, &id_req);
-        if(id_req == FIN) break;
         datasize =  id_req==68? 400 : MTU;
         head = handle_txring(sockfd);
         head->tp_len = L2FTP_HDRLEN + datasize;
@@ -116,37 +148,22 @@ void sender(void){
 }
 
 /* recieve request id and push to id_queue */
-void reciever(void){
+void* reciever(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
-    struct pollfd pfd;
     uint8_t id_req;
     printf("[Reciever] I will start a job\n");
     while(1){
-        head = (struct tpacket_hdr*)((uint8_t*)rxring + RFRAME_SIZE * rxring_offset);
-
-        /* TP_STATUS_KERNEL means threre is no redable data */
-        if(head->tp_status == TP_STATUS_KERNEL){
-            /* fill struct to prepare poll */
-            pfd.fd = sockfd;
-            pfd.events = POLLIN;
-            pfd.revents =0;
-            if(poll(&pfd, 1, -1) == -1){
-                perror("poll");
-                exit(EXIT_FAILURE);
-            }        
-        }   
-        hdr = (struct l2ftp_hdr*)((uint8_t*)head + head->tp_net);
+        deq_pkt(&pkt_q, &head);
+        hdr = (struct l2ftp_hdr*)((uint8_t*)head + head->tp_mac);
         id_req = hdr->segid;
         printf("[Sender] requested id: %hu\n", id_req);
-        enq_id(&id_q, id_req);
         if(id_req == FIN) break;
+        enq_id(&id_q, id_req);
         /* updata flag */
         head->tp_status = TP_STATUS_KERNEL;
-        /* update offset. if offset == RFRAME_NO, set 0 */
-        rxring_offset = (rxring_offset+1) % RFRAME_NO;
      }
-    printf("[Sender] File transmission complited!\n");
+    pthread_exit((void*)0);
 }
 
 /* free up resources */ 
@@ -166,7 +183,7 @@ void cleanup(void){
 }
 
 int main(void){
-    pthread_t r, s;
+    pthread_t m, r, s;
     uint8_t fno=0;
     int retvalue;
     
@@ -189,9 +206,15 @@ int main(void){
     pthread_mutex_init(&id_q.mutex, NULL);
     pthread_cond_init(&id_q.not_full, NULL);
     pthread_cond_init(&id_q.not_empty, NULL);
-    setup_sock();
+    pthread_mutex_init(&pkt_q.mutex, NULL);
+    pthread_cond_init(&pkt_q.not_full, NULL);
+    pthread_cond_init(&pkt_q.not_empty, NULL);
 
     /* create threads */
+     if(pthread_create(&m, NULL, (void *(*)(void *))master, NULL) != 0){
+        perror("pthread_create");
+        return EXIT_FAILURE;
+    }
     if(pthread_create(&r, NULL, (void *(*)(void *))reciever, NULL) != 0){
         perror("pthread_create");
         return EXIT_FAILURE;
