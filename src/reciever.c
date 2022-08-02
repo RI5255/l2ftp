@@ -64,13 +64,10 @@ uint8_t dest[ETH_ADDRLEN] = {0x00, 0x15, 0x5d, 0xf8, 0x36, 0x7e};
 /* allocate memory space for the file size and creates a file with the specified name */
 void init_fdata(uint8_t fno){
     fpath[18] = fno + 48;
-    if((fdata = mmap(NULL, FDATA_LEN, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS, -1 ,0)) == MAP_FAILED){
-        perror("mmap");
-        exit(EXIT_FAILURE);
-    }
-    if((fd = open(fpath, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR)) == -1){
-        perror("open");
-        exit(EXIT_FAILURE);
+    fdata = calloc(1, FDATA_LEN);
+    if(fdata == NULL){
+        perror("calloc");
+        exit(-1);
     }
 }
 
@@ -212,7 +209,6 @@ void master(void){
     }
 }
 
-
 void pkt_handler(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
@@ -257,11 +253,17 @@ void pkt_handler(void){
 
     }
     printf("file transmission complited!\n");
-    /* save in file */
+    /* ファイルデータを保存して終了 */
+    fd = open(fpath, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR);
+    if(fd == -1){
+        perror("open");
+        pthread_exit((void*)-1);
+    }
     if(write(fd, fdata, FDATA_LEN) == -1){
         perror("write");
-        exit(-1);
+        pthread_exit((void*)-1);
     }
+    pthread_exit((void*)0);
 }
 
 /* handle captured frame */
