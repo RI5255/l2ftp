@@ -18,41 +18,18 @@
 
 #include "id_queue.h"
 #include "packet_queue.h"
+#include "pktsock.h"
+#include "global.h"
 #include "l2ftp.h"
-#include "filter.h"
-
-/* parameters of TX ring */
-#define TBLOCK_NO 1
-#define TBLOCK_SIZE 8192 
-#define TFRAME_SIZE 128 /* TPACKET_HDRLEN(52) + ETH_HDRLEN(14) +  L21FTP_HDRLEN(4)がおさまるサイズ */
-#define TFRAME_NO 64
-
-/* parameters of RX ring */
-#define RBLOCK_NO 1
-#define RBLOCK_SIZE 163840 
-#define RFRAME_SIZE 2048 /* TPACKET_HDRLEN(52) + ETH_HDRLEN(14) +  L21FTP_HDRLEN(4) + DATA_LEN(1280)がおさまるサイズ */
-#define RFRAME_NO 80
-
-#define RING_SIZE (TBLOCK_SIZE * TBLOCK_NO + RBLOCK_SIZE * RBLOCK_NO)
-
-#define ETH_P_ALL 0x0003
-
-#define OFF (TPACKET_ALIGN(sizeof(struct tpacket_hdr)))
 
 #define FPATH_LEN 20
 #define MTU 1500
 #define FDATA_LEN 102400
 
-/* common data */
-static int sockfd;  /* sockfd */
-static void *txring;    /* pointer to TX ring */
-static void *rxring;    /* pointer to RX ring */
-static int txring_offset;   /* offset of TX ring */ 
-static int rxring_offset;   /* offset of RX ring */
 
-static char fpath[FPATH_LEN] = "./hanako/data/data"; 
-static void *fdata; /* pointer to file data */
-static int fd;  /* file fiscriptor */
+char fpath[FPATH_LEN] = "./hanako/data/data"; 
+void *fdata; /* pointer to file data */
+int fd;  /* file fiscriptor */
 struct id_queue send_q;
 struct packet_queue pkt_q;
 
@@ -69,118 +46,6 @@ void init_fdata(uint8_t fno){
         perror("calloc");
         exit(-1);
     }
-}
-
-/* bind socket to the specified device */
-void bind_sock(int sockfd, const char* device){
-    struct ifreq ifr;
-    struct sockaddr_ll addr;
-
-    /* fill struct to prepare binding */
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, device, IFNAMSIZ - 1); 
-
-    /* get interface index */
-    if(ioctl(sockfd, SIOCGIFINDEX, &ifr) == -1){
-        perror("ioctl");
-        exit(EXIT_FAILURE);
-    }   
-
-    /* fill sockaddr_ll struct to prepare binding */
-    addr.sll_family = AF_PACKET;
-    addr.sll_protocol = htons(ETH_P_ALL);
-    addr.sll_ifindex =  ifr.ifr_ifindex;
-
-    /* bind socket to the device */
-    if(bind(sockfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_ll)) == -1){
-        perror("bind");
-        exit(EXIT_FAILURE);
-    }
-}
-
-/* create socket, bind to interface, allocate TX&RX ring and mmap */
-void setup_sock(void){
-    struct tpacket_req packet_req;
-    int flag=1;
-
-    /* create socket */
-    if((sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) == -1){
-        perror("socket");
-        exit(EXIT_FAILURE);
-    }
-
-    /* set options */
-    if(setsockopt(sockfd, SOL_PACKET, PACKET_LOSS, &flag, sizeof(flag)) == -1){
-        perror("setsockopt: PACKET_LOSS");
-        exit(EXIT_FAILURE);
-    }
-
-    if(setsockopt(sockfd, SOL_SOCKET, SO_ATTACH_FILTER, &bpf, sizeof(bpf)) == -1){
-        perror("setsockopt: SO_ATTACH_FILTER");
-        exit(EXIT_FAILURE);
-    }
-
-    /* prepare RX ring request */
-    packet_req.tp_block_size = RBLOCK_SIZE;
-    packet_req.tp_block_nr = RBLOCK_NO;
-    packet_req.tp_frame_size = RFRAME_SIZE;
-    packet_req.tp_frame_nr = RFRAME_NO;
-
-    /* Allocate RX ring buffer */
-    if((setsockopt(sockfd, SOL_PACKET, PACKET_RX_RING, &packet_req, sizeof(packet_req))) == -1){
-        perror("setsockopt");
-        exit(EXIT_FAILURE);
-    }
-
-    /* prepare TX ring request */
-    packet_req.tp_block_size = TBLOCK_SIZE; 
-    packet_req.tp_block_nr = TBLOCK_NO;
-    packet_req.tp_frame_size = TFRAME_SIZE;
-    packet_req.tp_frame_nr = TFRAME_NO;
-
-    /* send TX ring request */
-    if(setsockopt(sockfd, SOL_PACKET, PACKET_TX_RING, (void*)&packet_req, sizeof(packet_req)) == -1){
-        perror("setsockopt: PACKET_RX_RING");
-        exit(EXIT_FAILURE);
-    }
-
-    /* bind */
-    bind_sock(sockfd, "eth0");
-
-    /* map to user space */
-    if((rxring = mmap(NULL, RING_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, sockfd, 0)) == NULL){
-        perror("mmap");
-        exit(EXIT_FAILURE);
-    }
-
-    /* calcurale head of RX ring */
-    txring = (void*)((uint8_t*)rxring + RBLOCK_SIZE * RBLOCK_NO);
-}
-
-/* wait until there is space in the TX ring and return a pointer to the frame.*/
-struct tpacket_hdr * handle_txring(int sockfd){
-    struct tpacket_hdr *head;
-    struct pollfd pfd;
-  
-    head = (struct tpacket_hdr*)((uint8_t*)txring + TFRAME_SIZE * txring_offset);
-   
-    /* TP_STATUS_AVAILABLE means there is space in TX ring */
-    if(head->tp_status != TP_STATUS_AVAILABLE){
-        /* fill struct to prepare poll */
-        pfd.fd = sockfd;
-        pfd.events = POLLOUT;
-        pfd.revents =0;
-        if(poll(&pfd, 1, -1) == -1){
-            perror("poll");
-            exit(EXIT_FAILURE);
-        }        
-    }   
-
-    /* update offset. if offset == TFRAME_NO, set 0*/
-    txring_offset = (txring_offset + 1) % TFRAME_NO;
-
-    /* return pointer to frame*/
-    return head;
 }
 
 void master(void){
@@ -267,7 +132,7 @@ void pkt_handler(void){
 }
 
 /* handle captured frame */
-static void sender(void){
+void sender(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
     uint8_t id_req;
@@ -302,30 +167,36 @@ static void sender(void){
 }
 
 /* free up resources */ 
-static void cleanup(void){
-    /* close socket */
-    if(close(sockfd) == -1){
-        perror("close");
-        exit(EXIT_FAILURE);
-    }
-
+void cleanup(void){
     /* close file discriptor */
     if(close(fd) == -1){
         perror("close");
         exit(EXIT_FAILURE);
     }
-
     /* free memory space */
-    if(munmap(fdata, FDATA_LEN) == -1){
-        perror("munmap");
-        exit(EXIT_FAILURE);
-    }
+    free(fdata);
+    /* queueの変数はサボる。(再利用することはないので問題ない。はず。)*/
 }
 
 int main(void){
     pthread_t m, pkt_h, s;
     uint8_t fno = 0;
 
+    /* set params */
+    TBLOCK_NO = 1;
+    TBLOCK_SIZE = 8192;
+    TFRAME_NO = 64;
+    TFRAME_SIZE = 128;
+    RBLOCK_NO = 1;
+    RBLOCK_SIZE = 163840;
+    RFRAME_NO = 80;
+    RFRAME_SIZE = 2048;
+    RING_SIZE = TBLOCK_NO * TBLOCK_SIZE + RBLOCK_NO * RBLOCK_SIZE;
+
+    if(setup_sock() == -1){
+        printf("setup_sock");
+        return -1;
+    }
     init_fdata(fno);
     pthread_mutex_init(&send_q.mutex, NULL);
     pthread_cond_init(&send_q.not_full, NULL);
@@ -333,7 +204,6 @@ int main(void){
     pthread_mutex_init(&pkt_q.mutex, NULL);
     pthread_cond_init(&pkt_q.not_full, NULL);
     pthread_cond_init(&pkt_q.not_empty, NULL);
-    setup_sock();
 
     /* create threads */
     if(pthread_create(&m, NULL, (void *(*)(void *))master, NULL) != 0){
@@ -349,7 +219,7 @@ int main(void){
         return EXIT_FAILURE;
     }
     pthread_join(pkt_h,NULL);
-    pthread_exit(NULL);
     cleanup();
+    destroy_sock();
     return EXIT_SUCCESS;
 }
