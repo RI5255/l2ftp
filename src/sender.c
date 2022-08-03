@@ -39,22 +39,28 @@ struct packet_queue pkt_q;
 uint8_t dest[ETH_ADDRLEN] = {0x00, 0x15, 0x5d, 0xf8, 0x36, 0x7e};
 
 /* open file and mmap*/
-void init_fdata(uint8_t fno){
+int init_fdata(uint8_t fno){
     fpath[16] = fno + 48;
     if((fd = open(fpath, O_RDONLY)) == -1){
         perror("open");
-        exit(EXIT_FAILURE);
+        return -1;
     }
     if((fdata = mmap(NULL, FDATA_LEN, PROT_READ, MAP_SHARED, fd ,0)) == MAP_FAILED){
         perror("mmap");
-        exit(EXIT_FAILURE);
+        return -1;
     }
+    return 0;
 }
 
 /* frameを受信してqueueに入れる */
-void master(void){
+void* master(void){
     struct tpacket_hdr *head;
     struct pollfd pfd;
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = sockfd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
 
     printf("[Master] I will start a job\n");
     while(1){
@@ -62,13 +68,9 @@ void master(void){
 
         /* TP_STATUS_KERNEL means threre is no redable data */
         while(head->tp_status == TP_STATUS_KERNEL){
-            /* fill struct to prepare poll */
-            pfd.fd = sockfd;
-            pfd.events = POLLIN;
-            pfd.revents =0;
             if(poll(&pfd, 1, -1) == -1){
                 perror("poll");
-                exit(EXIT_FAILURE);
+                pthread_exit((void*)-1);
             }        
         }  
 
@@ -80,7 +82,7 @@ void master(void){
 }
 
 /* send file data */
-void sender(void){
+void* sender(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
     uint8_t i,j, id_req; 
@@ -111,9 +113,9 @@ void sender(void){
         head->tp_status = TP_STATUS_SEND_REQUEST;
     }
     /* send frame */
-    if(send(sockfd, NULL, 0, 0) == -1){
+    if(send(sockfd, NULL, 0, MSG_DONTWAIT) == -1){
         perror("send");
-        exit(EXIT_FAILURE);
+        pthread_exit((void*)-1);
     }
     
     /* 要求されたidに該当するデータを送信 */
@@ -139,9 +141,9 @@ void sender(void){
         head->tp_status = TP_STATUS_SEND_REQUEST;
 
         /* send frame */
-        if(send(sockfd, NULL, 0, 0)  == -1){
+        if(send(sockfd, NULL, 0, MSG_DONTWAIT)  == -1){
             perror("send");
-            exit(EXIT_FAILURE);
+            pthread_exit((void*)-1);
         }
         printf("[Sender] sent requested data id: %hu\n", id_req);
     }
@@ -152,34 +154,43 @@ void* reciever(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
     uint8_t id_req;
+
     printf("[Reciever] I will start a job\n");
     while(1){
         deq_pkt(&pkt_q, &head);
+
         hdr = (struct l2ftp_hdr*)((uint8_t*)head + head->tp_mac);
         id_req = hdr->segid;
         printf("[Sender] requested id: %hu\n", id_req);
         if(id_req == FIN) break;
+
+        /* 送信キューに入れる */
         enq_id(&id_q, id_req);
+
         /* updata flag */
         head->tp_status = TP_STATUS_KERNEL;
      }
+
     pthread_exit((void*)0);
 }
 
 /* free up resources */ 
-void cleanup(void){
+int cleanup(void){
     /* close file discriptor */
     if(close(fd) == -1){
         perror("close");
-        exit(EXIT_FAILURE);
+        return -1;
     }
 
     /* free memory space */
     if(munmap(fdata, FDATA_LEN) == -1){
         perror("munmap");
-        exit(EXIT_FAILURE);
+        return -1;
     }
-    /* queueの変数はサボる。(再利用することはないので問題ない。はず。)*/
+    
+    /* queueの変数は削除しなくていいのか疑問。これが呼ばれる前にexitしているからいいのか？*/
+    
+    return 0;
 }
 
 int main(void){
@@ -202,7 +213,10 @@ int main(void){
         printf("setup_sock");
         return -1;
     }
-    init_fdata(fno);
+    if(init_fdata(fno) == -1){
+        printf("init_fdata() failed\n");
+        return -1;
+    }
     pthread_mutex_init(&id_q.mutex, NULL);
     pthread_cond_init(&id_q.not_full, NULL);
     pthread_cond_init(&id_q.not_empty, NULL);
@@ -230,7 +244,10 @@ int main(void){
         return -1;
     }
     printf("file transmission complited!\n");
-    cleanup();
+    if(cleanup() == -1){
+        printf("cleanup failed\n");
+        return -1;
+    }
     destroy_sock();
     return EXIT_SUCCESS;
 }

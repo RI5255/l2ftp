@@ -109,13 +109,15 @@ struct tpacket_hdr * handle_txring(int sockfd){
     struct pollfd pfd;
   
     head = (struct tpacket_hdr*)((uint8_t*)txring + TFRAME_SIZE * txring_offset);
-   
+    
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = sockfd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+
     /* TP_STATUS_AVAILABLE means there is space in TX ring */
-    if(head->tp_status != TP_STATUS_AVAILABLE){
+    while(head->tp_status != TP_STATUS_AVAILABLE){
         /* fill struct to prepare poll */
-        pfd.fd = sockfd;
-        pfd.events = POLLOUT;
-        pfd.revents =0;
         if(poll(&pfd, 1, -1) == -1){
             perror("poll");
             return NULL;

@@ -38,33 +38,37 @@ uint8_t dest[ETH_ADDRLEN] = {0x00, 0x15, 0x5d, 0xf8, 0x36, 0x7e};
 #define FRAME_NO 69 /* 69 frame per 1 file */
 #define RECIEVED 0x01
 
+uint8_t table[FRAME_NO]; /* control table */
+
 /* allocate memory space for the file size and creates a file with the specified name */
-void init_fdata(uint8_t fno){
+int init_fdata(uint8_t fno){
     fpath[18] = fno + 48;
     fdata = calloc(1, FDATA_LEN);
     if(fdata == NULL){
         perror("calloc");
-        exit(-1);
+        return -1;
     }
+    return 0;
 }
 
 /* frameを受信してqueueに入れる */
-void master(void){
+void* master(void){
     struct tpacket_hdr *head;
     struct pollfd pfd;
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = sockfd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
 
     printf("[Master] I will start a job\n");
     while(1){
         head = (struct tpacket_hdr*)((uint8_t*)rxring + RFRAME_SIZE * rxring_offset);
-        /* TP_STATUS_KERNEL means threre is no redable data */
+        /* TP_STATUS_KERNEL means threre is no readable data */
         while(head->tp_status == TP_STATUS_KERNEL){
-            /* fill struct to prepare poll */
-            pfd.fd = sockfd;
-            pfd.events = POLLIN;
-            pfd.revents =0;
             if(poll(&pfd, 1, -1) == -1){
                 perror("poll");
-                exit(EXIT_FAILURE);
+                pthread_exit((void*)-1);
             }        
         }  
 
@@ -81,7 +85,6 @@ void* reciever(void){
     struct l2ftp_hdr *hdr;
     uint8_t segid;
     unsigned int datasize; 
-    uint8_t table[FRAME_NO] = {}; /* control table */
 
     printf("[Reciever] I will start a job\n");
 
@@ -109,17 +112,102 @@ void* reciever(void){
     }
 }
 
-/* idをもとに要求する */
+#define NORMAL 0
+#define RECOVER1 1
+#define RECOVER2 2
+
+/* ackの算出+抜けているデータの再送要求 */
 void* sender(void){
     struct tpacket_hdr *head;
     struct l2ftp_hdr *hdr;
-    uint8_t id_req;
-    int i;
-    
+    static uint8_t state, ack, id_req, id_recv;
+    uint8_t i, j;
+
     printf("[Sender] I will start a job\n");
     while(1){
-        deq_id(&id_q, &id_req);
-        if(id_req == 68){
+        deq_id(&id_q, &id_recv);
+        switch(state){
+            case NORMAL:
+                if(id_recv != ack){
+                    id_req = ack;
+                    state = RECOVER1;
+                    printf("[Sender]change state to RECOEVER1\n");
+                }else{
+                    /* ackを更新 */
+                    ack++;
+                    break;
+                }
+
+            case RECOVER1:
+                if(id_recv < id_req){
+                    state = RECOVER2;
+                    printf("[Sender]change state to RECOEVER2\n");
+                }else{
+                     /* lostした全てのidを要求 */
+                    for(j=id_req; j!=id_recv; j++){    
+                        head = handle_txring(sockfd);
+                        head->tp_len = L2FTP_HDRLEN;
+
+                        /* build l2ftp_hdr */
+                        hdr = (struct l2ftp_hdr*)((uint8_t*)head + OFF);
+                        for(i=0; i<ETH_ADDRLEN; i++){
+                            hdr->dest[i] = dest[i];
+                        }
+                        hdr->fid = 0;
+                        hdr->segid = j;
+                        hdr->proto = htons(0x88b5);
+                        
+                        /* updata status */
+                        head->tp_status = TP_STATUS_SEND_REQUEST;
+
+                        /* send frame */
+                        if(send(sockfd, NULL, 0, MSG_DONTWAIT) == -1){
+                            perror("send");
+                            pthread_exit((void*)-1);
+                        }
+                        printf("[Sender] sent request %hu\n", j);
+                    }
+                    id_req = id_recv + 1 ;
+                    break;
+                }
+
+            case RECOVER2:
+                if(id_recv == ack){
+                    /* ackを更新できるだけ更新する。 */
+                    while(table[ack] == RECIEVED) ack++;
+                    printf("ack: %d\n", ack);
+                }
+                else{
+                    /* 受け取ったidまでで、まだ受信していないidを要求 */
+                    for(j=id_req; j!=id_recv; j = (j+1) % 68){    
+                        if(table[j] == RECIEVED) continue;
+                        head = handle_txring(sockfd);
+                        head->tp_len = L2FTP_HDRLEN;
+
+                        /* build l2ftp_hdr */
+                        hdr = (struct l2ftp_hdr*)((uint8_t*)head + OFF);
+                        for(i=0; i<ETH_ADDRLEN; i++){
+                            hdr->dest[i] = dest[i];
+                        }
+                        hdr->fid = 0;
+                        hdr->segid = j;
+                        hdr->proto = htons(0x88b5);
+                        
+                        /* updata status */
+                        head->tp_status = TP_STATUS_SEND_REQUEST;
+
+                        /* send frame */
+                        if(send(sockfd, NULL, 0, MSG_DONTWAIT) == -1){
+                            perror("send");
+                            pthread_exit((void*)-1);
+                        }
+                        printf("[Sender] sent request %hu\n", j);
+                    }
+                    id_req = id_recv + 1;
+                }
+                break;
+        }
+        if(ack == 69){
             head = handle_txring(sockfd);
             head->tp_len = L2FTP_HDRLEN;
 
@@ -136,15 +224,15 @@ void* sender(void){
             head->tp_status = TP_STATUS_SEND_REQUEST;
 
             /* send frame */
-            if(send(sockfd, NULL, 0, 0) == -1){
+            if(send(sockfd, NULL, 0, MSG_DONTWAIT) == -1){
                 perror("send");
-                exit(-1);
+                pthread_exit((void*)-1);
             }
-            printf("[Sender] sent request %hu\n", 69);
+            printf("[Sender] send FIN\n");
             break;
         }
     }
-     /* ファイルデータを保存して終了 */
+    /* ファイルデータを保存して終了 */
     fd = open(fpath, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR);
     if(fd == -1){
         perror("open");
@@ -158,15 +246,18 @@ void* sender(void){
 }
 
 /* free up resources */ 
-void cleanup(void){
+int cleanup(void){
     /* close file discriptor */
     if(close(fd) == -1){
         perror("close");
-        exit(EXIT_FAILURE);
+        return -1;
     }
     /* free memory space */
     free(fdata);
-    /* queueの変数はサボる。(再利用することはないので問題ない。はず。)*/
+
+    /* queueの変数は削除しなくていいのか疑問。これが呼ばれる前にexitしているからいいのか？*/
+    
+    return 0;
 }
 
 int main(void){
@@ -189,7 +280,10 @@ int main(void){
         printf("setup_sock");
         return -1;
     }
-    init_fdata(fno);
+    if(init_fdata(fno) == -1){
+        printf("init_fdata() failed\n");
+        return -1;
+    }
     pthread_mutex_init(&id_q.mutex, NULL);
     pthread_cond_init(&id_q.not_full, NULL);
     pthread_cond_init(&id_q.not_empty, NULL);
@@ -200,15 +294,15 @@ int main(void){
     /* create threads */
     if(pthread_create(&m, NULL, (void *(*)(void *))master, NULL) != 0){
         perror("pthread_create");
-        return EXIT_FAILURE;
+        return -1;
     }
     if(pthread_create(&r, NULL, (void *(*)(void *))reciever, NULL) != 0){
         perror("pthread_create");
-        return EXIT_FAILURE;
+        return -1;
     }
     if(pthread_create(&s, NULL, (void *(*)(void *))sender, NULL) != 0){
         perror("pthread_create");
-        return EXIT_FAILURE;
+        return -1;
     }
     pthread_join(s, (void*)&retvalue);
     if(retvalue != 0){
@@ -216,7 +310,10 @@ int main(void){
         return -1;
     }
     printf("file transmission complited!\n");
-    cleanup();
+    if(cleanup() == -1){
+        printf("cleanup failed\n");
+        return -1;
+    }
     destroy_sock();
-    return EXIT_SUCCESS;
+    return 0;
 }
