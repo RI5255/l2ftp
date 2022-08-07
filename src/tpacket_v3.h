@@ -11,16 +11,16 @@ struct ring_param{
     unsigned int rblocksiz; 
     unsigned int rblocknum;
     unsigned int rframesiz;
-    unsigned int rframenum;
     unsigned int tblocksiz; 
     unsigned int tblocknum;
     unsigned int tframesiz;
-    unsigned int tframenum;
+    unsigned int tframeperblock;
 };
 
 /* ring bufferの情報を保持する構造体 */
 struct ring{
     struct iovec *rb;
+    struct iovec *tb;
     struct ring_param param;
 };
 

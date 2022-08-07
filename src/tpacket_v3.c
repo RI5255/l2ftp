@@ -20,7 +20,6 @@
 /* 内部データ */
 static unsigned int ringsiz;
 static uint8_t *rxring;
-static uint8_t *txring;
 
 /* 公開データ */
 int sockfd;
@@ -58,6 +57,7 @@ static int bind_sock(int sockfd, const char* devname){
 int setup_socket(void){
     int err, i, v = TPACKET_V3;
     struct tpacket_req3 req;
+    uint8_t* txring;
 
     /* socketを作成 */
     sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -80,15 +80,12 @@ int setup_socket(void){
         return -1;
     }
 
-    ring.param.rframenum = (ring.param.rblocksiz * ring.param.rblocknum) / ring.param.rframesiz;
-    ring.param.tframenum = (ring.param.tblocksiz * ring.param.tblocknum) / ring.param.tframesiz;
-
     /* RX RINGを確保する準備 */
     memset(&req, 0, sizeof(req));
     req.tp_block_size = ring.param.rblocksiz;
     req.tp_frame_size = ring.param.rframesiz;
     req.tp_block_nr = ring.param.rblocknum;
-    req.tp_frame_nr = ring.param.rframenum;
+    req.tp_frame_nr = (ring.param.rblocksiz * ring.param.rblocknum) / ring.param.rframesiz;
     req.tp_retire_blk_tov = 60; // ブロックが埋まっていなくても返るタイムアウト。ミリ秒
 
     /* RX RINGを確保  */
@@ -103,7 +100,9 @@ int setup_socket(void){
     req.tp_block_size = ring.param.tblocksiz;
     req.tp_frame_size = ring.param.tframesiz;
     req.tp_block_nr = ring.param.tblocknum;
-    req.tp_frame_nr = ring.param.tframenum;
+    req.tp_frame_nr = (ring.param.tblocksiz * ring.param.tblocknum) / ring.param.tframesiz;
+
+    ring.param.tframeperblock = ring.param.tblocksiz / ring.param.tframesiz;
 
     /* TX RINGを確保 */
     err = setsockopt(sockfd, SOL_PACKET, PACKET_TX_RING, &req, sizeof(req));
@@ -140,6 +139,16 @@ int setup_socket(void){
         ring.rb[i].iov_len = ring.param.rblocksiz;
     }
 
+    ring.tb = malloc(ring.param.tblocknum * sizeof(*ring.tb));
+    if(ring.tb == NULL){
+        perror("malloc");
+        return -1;
+    }
+    for(i = 0; i < ring.param.tblocknum; i++){
+        ring.rb[i].iov_base = rxring + (i * ring.param.tblocksiz);
+        ring.rb[i].iov_len = ring.param.tblocksiz;
+    }
+
     return 0;
 }
 
@@ -158,7 +167,7 @@ void flush_block(struct tpacket_block_desc *pbd){
 struct tpacket3_hdr * getfreeframe(void){
     struct tpacket3_hdr *ppd; 
     struct pollfd pfd;
-    static unsigned int i;
+    static unsigned int blocknum, i;
 
     memset(&pfd, 0, sizeof(pfd));
     pfd.fd = sockfd;
@@ -166,7 +175,7 @@ struct tpacket3_hdr * getfreeframe(void){
     pfd.revents = 0;
 
     while(1){
-        ppd = (struct tpacket3_hdr*)(txring + ring.param.rframesiz * i);
+        ppd = (struct tpacket3_hdr*)((uint8_t*)ring.tb[blocknum].iov_base + ring.param.tframesiz * i);
         if(ppd->tp_status != TP_STATUS_AVAILABLE){
             poll(&pfd, 1, -1);
             continue;
@@ -174,7 +183,12 @@ struct tpacket3_hdr * getfreeframe(void){
         break;
     }
     
-    i = (i + 1) % ring.param.tframenum;
+    i++;
+    if(i == ring.param.tframeperblock){
+        blocknum = (blocknum + 1) % ring.param.tblocknum;
+        i = 0;
+    }
+
     return ppd;    
 }
 
