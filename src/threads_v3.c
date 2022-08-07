@@ -79,7 +79,7 @@ void frame_handler_r(struct tpacket3_hdr *ppd){
     datalen = ppd->tp_snaplen - L2FTP_HDRLEN;
     fid = phdr->fid;
     segid = phdr->segid;
-    pvch = pvch_head + fid;
+    pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * fid);
 
     /* 既に受信済みなら何もしない */
     if(pvch->table[segid]){
@@ -87,7 +87,7 @@ void frame_handler_r(struct tpacket3_hdr *ppd){
     }
 
     /* データをコピーして受信完了をマーク */
-    memcpy((void*)((uint8_t*)pvch->fdata + 1500 * segid), (void*)((uint8_t*)phdr + L2FTP_HDRLEN), datalen);
+    memcpy((void*)(pvch->fdata + 1500 * segid), (void*)((uint8_t*)phdr + L2FTP_HDRLEN), datalen);
     pvch->table[segid] = RECIEVED;
 
     /* fidがfid_recentとは異なっていたら別のchannelに対する通信に切り替わったことが分かる。 */
@@ -130,7 +130,7 @@ void *fdata_checker(void){
     while(1){
          /* deqしたfidの情報を保持するvchannelを取得 */
         deq_fid(&fid_q, &fid);
-        pvch = pvch_head + fid;
+        pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * fid);
 
         /* ackを更新できるだけ更新 */
         while(pvch->table[pvch->ack])
@@ -179,7 +179,7 @@ void frame_handler_s(struct tpacket3_hdr *ppd){
 
     phdr = (struct l2ftp_hdr*)((uint8_t*)ppd + ppd->tp_mac);
     fid = phdr->fid;
-    pvch = (struct vchannel_s*)((uint8_t*)pvch_head + sizeof(struct vchannel_s) * fid);
+    pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
 
     psegid_req = (uint8_t*)phdr + L2FTP_HDRLEN;
 
@@ -192,7 +192,7 @@ void frame_handler_s(struct tpacket3_hdr *ppd){
         phdr = (struct l2ftp_hdr*)((uint8_t*)ppd2send + OFF);
         pdata = build_l2ftp(phdr, fid, *psegid_req);
         datalen = *psegid_req == 68 ? 400 : 1500;
-        memcpy(pdata, (void*)((uint8_t*)pvch->fdata + 1500 * *psegid_req), datalen);
+        memcpy(pdata, (void*)(pvch->fdata + 1500 * *psegid_req), datalen);
         send_frame(ppd, datalen);
         psegid_req++;
     }
@@ -211,13 +211,13 @@ void * fdata_sender(void){
 
     /* TODO ファイル数やidをハードコードしているので直す。numfidはvchannelが持つべき。*/
     for(fid = 0; fid != 1000; fid++){
-        pvch = (struct vchannel_s*)((uint8_t*)pvch_head + sizeof(struct vchannel_s) * fid);
+        pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
         for(segid = 0; segid != 69; segid++){
             datalen = segid == 68? 400 : 1500;
             ppd2send = getfreeframe();
             phdr = (struct l2ftp_hdr*)((uint8_t*)ppd2send + OFF);
             build_l2ftp(phdr, fid, segid);
-            memcpy((void*)((uint8_t*)phdr + L2FTP_HDRLEN), (void*)((uint8_t*)pvch->fdata + 1500 * segid), datalen);
+            memcpy((void*)((uint8_t*)phdr + L2FTP_HDRLEN), (void*)(pvch->fdata + 1500 * segid), datalen);
             send_frame(ppd2send, datalen);
         }
         printf("[fdata_sender] sent data fid: %u\n", fid);

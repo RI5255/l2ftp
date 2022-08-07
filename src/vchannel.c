@@ -18,7 +18,7 @@ static char fpath_base[20];
 unsigned char vchflag; /* 受信側か送信側か */
 unsigned int vchnum; /* channelの数 */
 uint16_t fid_recent;
-struct vchannel_r *pvch_head;
+uint8_t *pvch_head;
 
 
 static int setup_fdata(void){
@@ -28,7 +28,7 @@ static int setup_fdata(void){
 
     if(vchflag == VCH_R){
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_r) * i);
+            pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * i);
             pvch->fdata = calloc(1, FDATALEN);
             if(pvch->fdata == NULL){
                 perror("calloc");
@@ -37,7 +37,7 @@ static int setup_fdata(void){
         }
     }else{
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_s) * i);
+            pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_s) * i);
             snprintf(fpath, 30, "%s%d", fpath_base, i);
             
             fd[i] = open(fpath, O_RDONLY);
@@ -68,12 +68,12 @@ static void teardown_fdata(void){
 
     if(vchflag == VCH_R){
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_r) * i);
+            pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * i);
             free(pvch->fdata);
         }
     }else{
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_s) * i);
+            pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_s) * i);
             munmap(pvch->fdata, FDATALEN);
         }
     }
@@ -171,7 +171,7 @@ int save_fdata(uint16_t fid){
     struct vchannel_r *pvch;
     void *fdata;
 
-    pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_r) * fid);
+    pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * fid);
     fdata = (void*)pvch->fdata;
 
     snprintf(fpath, 30, "%s%d", fpath_base, fid);
