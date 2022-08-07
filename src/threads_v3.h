@@ -10,8 +10,12 @@ void setup_threads_v3(void);
 void teardown_threads_v3(void);
 
 void * master(void);
+void * blk_handler(void);
+
 void frame_handler_r(struct tpacket3_hdr *ppd);
-void * blk_handler_r(void);
 void * fdata_checker(void);
+
+void frame_handler_s(struct tpacket3_hdr *ppd);
+void * fdata_sender(void);
 
 #endif 

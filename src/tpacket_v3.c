@@ -145,8 +145,8 @@ int setup_socket(void){
         return -1;
     }
     for(i = 0; i < ring.param.tblocknum; i++){
-        ring.rb[i].iov_base = txring + (i * ring.param.tblocksiz);
-        ring.rb[i].iov_len = ring.param.tblocksiz;
+        ring.tb[i].iov_base = txring + (i * ring.param.tblocksiz);
+        ring.tb[i].iov_len = ring.param.tblocksiz;
     }
 
     return 0;
@@ -173,7 +173,6 @@ struct tpacket3_hdr * getfreeframe(void){
     pfd.fd = sockfd;
     pfd.events = POLLOUT;
     pfd.revents = 0;
-
     while(1){
         ppd = (struct tpacket3_hdr*)((uint8_t*)ring.tb[blocknum].iov_base + ring.param.tframesiz * i);
         if(ppd->tp_status != TP_STATUS_AVAILABLE){

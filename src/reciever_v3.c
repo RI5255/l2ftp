@@ -12,6 +12,7 @@ int main(){
         return -1;
     }
     err = activate_vchannel(VCH_R, 1000, "./hanako/data/data");
+    teardown_socket();
     if(err == -1){
         return -1;
     }

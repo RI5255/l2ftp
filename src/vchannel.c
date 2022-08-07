@@ -12,13 +12,14 @@
 #include <pthread.h>
 
 /* 内部データ */
-static unsigned char vchflag; /* 受信側か送信側か */
-static unsigned int vchnum; /* channelの数 */
 static char fpath_base[20]; 
 
 /* 公開データ */
-struct vchannel_r *vch_head;
+unsigned char vchflag; /* 受信側か送信側か */
+unsigned int vchnum; /* channelの数 */
 uint16_t fid_recent;
+struct vchannel_r *pvch_head;
+
 
 static int setup_fdata(void){
     int i, fd[vchnum];
@@ -27,7 +28,7 @@ static int setup_fdata(void){
 
     if(vchflag == VCH_R){
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)vch_head + sizeof(struct vchannel_r) * i);
+            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_r) * i);
             pvch->fdata = calloc(1, FDATALEN);
             if(pvch->fdata == NULL){
                 perror("calloc");
@@ -36,7 +37,7 @@ static int setup_fdata(void){
         }
     }else{
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)vch_head + sizeof(struct vchannel_s) * i);
+            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_s) * i);
             snprintf(fpath, 30, "%s%d", fpath_base, i);
             
             fd[i] = open(fpath, O_RDONLY);
@@ -67,12 +68,12 @@ static void teardown_fdata(void){
 
     if(vchflag == VCH_R){
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)vch_head + sizeof(struct vchannel_r) * i);
+            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_r) * i);
             free(pvch->fdata);
         }
     }else{
         for(i = 0; i < vchnum; i++){
-            pvch = (struct vchannel_r*)((uint8_t*)vch_head + sizeof(struct vchannel_s) * i);
+            pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_s) * i);
             munmap(pvch->fdata, FDATALEN);
         }
     }
@@ -86,15 +87,15 @@ static int setup_vchannel(const unsigned char flag, const uint16_t fno, const ch
 
     /* vchannel構造体の配列を作成。関数ポインタに値をセット */
     if(vchflag == VCH_R){
-        vch_head = calloc(vchnum, sizeof(struct vchannel_r));
+        pvch_head = calloc(vchnum, sizeof(struct vchannel_r));
         frame_handler = frame_handler_r;
     }
     else{
-        vch_head = calloc(vchnum, sizeof(struct vchannel_s));
-        //frame_handler_s;
+        pvch_head = calloc(vchnum, sizeof(struct vchannel_s));
+        frame_handler = frame_handler_s;
     }
 
-    if(vch_head == NULL){
+    if(pvch_head == NULL){
         perror("calloc");
         return -1;
     }   
@@ -110,11 +111,11 @@ static int setup_vchannel(const unsigned char flag, const uint16_t fno, const ch
 
 static void teardown_vchannel(void){
     teardown_fdata();
-    free(vch_head);
+    free(pvch_head);
 }
 
 int activate_vchannel(const unsigned char flag, const uint16_t fno, const char* base){
-    pthread_t master_t, handler_t, checker_t;
+    pthread_t master_t, handler_t, worker_t;
     int err;
 
     err = setup_vchannel(flag, fno, base);
@@ -131,14 +132,24 @@ int activate_vchannel(const unsigned char flag, const uint16_t fno, const char* 
         perror("pthread_create");
         return -1;
     }
-    if(pthread_create(&handler_t, NULL, (void *(*)(void *))blk_handler_r, NULL) != 0){
+    if(pthread_create(&handler_t, NULL, (void *(*)(void *))blk_handler, NULL) != 0){
         perror("pthread_create");
         return -1;
     }
-    if(pthread_create(&checker_t, NULL, (void *(*)(void *))fdata_checker, NULL) != 0){
-        perror("pthread_create");
-        return -1;
-    }
+
+    /* flagによって起動するthreadを変える。 条件分岐が汚いな... */
+   if(vchflag == VCH_R){
+        if(pthread_create(&worker_t, NULL, (void *(*)(void *))fdata_checker, NULL) != 0){
+            perror("pthread_create");
+            return -1;
+        }
+   }else{
+        if(pthread_create(&worker_t, NULL, (void *(*)(void *))fdata_sender, NULL) != 0){
+            perror("pthread_create");
+            return -1;
+        }
+   }
+
     pthread_join(master_t, (void*)&err);
 
     if(err != 0){
@@ -149,7 +160,7 @@ int activate_vchannel(const unsigned char flag, const uint16_t fno, const char* 
     /* 後片付け */
     teardown_threads_v3();
     teardown_vchannel();
-    
+
     return 0;
 }
 
@@ -160,7 +171,7 @@ int save_fdata(uint16_t fid){
     struct vchannel_r *pvch;
     void *fdata;
 
-    pvch = (struct vchannel_r*)((uint8_t*)vch_head + sizeof(struct vchannel_r) * fid);
+    pvch = (struct vchannel_r*)((uint8_t*)pvch_head + sizeof(struct vchannel_r) * fid);
     fdata = (void*)pvch->fdata;
 
     snprintf(fpath, 30, "%s%d", fpath_base, fid);
