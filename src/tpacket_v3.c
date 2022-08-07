@@ -197,7 +197,7 @@ void send_frame(struct tpacket3_hdr* ppd, unsigned int datalen){
     ppd -> tp_len = L2FTP_HDRLEN + datalen;
     ppd -> tp_status = TP_STATUS_SEND_REQUEST;
     
-    err = send(sockfd, NULL, 0, MSG_DONTWAIT);
+    err = send(sockfd, NULL, 0, 0);
     if(err == -1){
         perror("send");
     }
