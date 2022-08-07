@@ -33,7 +33,7 @@ void teardown_threads_v3(void){
 /* 受信したblockをqueueに入れる */
 void * master(void){
     int err;
-    unsigned int blocknum = 0;
+    static unsigned int blocknum = 0;
     socklen_t len;
     struct tpacket_block_desc *pbd;
     struct pollfd pfd;
@@ -47,7 +47,7 @@ void * master(void){
     while(1){
         pbd = (struct tpacket_block_desc*)ring.rb[blocknum].iov_base;
 
-        if(pbd->hdr.bh1.block_status != TP_STATUS_USER){
+        if((pbd->hdr.bh1.block_status & TP_STATUS_USER) == 0){
             poll(&pfd, 1, -1);
             continue;
         }
@@ -111,7 +111,8 @@ void * blk_handler(void){
         for(i=0; i < num_pkts; i++){
             frame_handler(ppd);
             ppd = (struct tpacket3_hdr *)((uint8_t *)ppd + ppd->tp_next_offset);
-        }   
+        } 
+        flush_block(pbd);  
     }
     pthread_exit((void*)0);
 }
@@ -130,6 +131,7 @@ void *fdata_checker(void){
     while(1){
          /* deqしたfidの情報を保持するvchannelを取得 */
         deq_fid(&fid_q, &fid);
+        printf("[fdata_checker] checking fid: %u\n", fid);
         pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * fid);
 
         /* ackを更新できるだけ更新 */
@@ -141,6 +143,7 @@ void *fdata_checker(void){
             if(save_fdata(fid) == -1){
                 printf("save file failed\n");
             }
+            printf("[fdata_checker] fdata check passed! : %u\n", fid);
         /* 抜けがあるので要求(tableを探索するのは非効率な気もするが...) */
         }else{
             ppd = getfreeframe();

@@ -8,8 +8,6 @@
 #define FID_QUEUE_SIZE 32
 #endif 
 
-#define FIN 69
-
 struct fid_queue{
     uint16_t queue[FID_QUEUE_SIZE];
     int remain;    /* number of elements in the queue */
