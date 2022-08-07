@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <linux/if_packet.h>
 
+void (* frame_handler)(struct tpacket3_hdr *ppd);
 
 void setup_threads_v3(void){
     /* 使用するqueueを初期化 */
@@ -108,7 +109,7 @@ void * blk_handler_r(void){
         ppd = (struct tpacket3_hdr *) ((uint8_t *)pbd + pbd->hdr.bh1.offset_to_first_pkt);
 
         for(i=0; i < num_pkts; i++){
-            frame_handler_r(ppd);
+            frame_handler(ppd);
             ppd = (struct tpacket3_hdr *)((uint8_t *)ppd + ppd->tp_next_offset);
         }   
     }
@@ -162,6 +163,6 @@ void * fdata_checker(void){
     pthread_exit((void*)0);
 }
 
-// for Sender
-//1: ファイルデータを先頭から送り続けるthread
-//2: 要求されたファイルデータを送り返すthread
+/* vchflagがVCH_S、つまり送信側用のthread */
+
+void * frame_handler_s(void);

@@ -145,7 +145,7 @@ int setup_socket(void){
         return -1;
     }
     for(i = 0; i < ring.param.tblocknum; i++){
-        ring.rb[i].iov_base = rxring + (i * ring.param.tblocksiz);
+        ring.rb[i].iov_base = txring + (i * ring.param.tblocksiz);
         ring.rb[i].iov_len = ring.param.tblocksiz;
     }
 

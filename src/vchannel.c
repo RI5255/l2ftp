@@ -84,11 +84,15 @@ static int setup_vchannel(const unsigned char flag, const uint16_t fno, const ch
     vchnum = fno;
     strcpy(fpath_base, base);
 
-    /* vchannelnum分のvchannelを作成 */
-    if(vchflag == VCH_R)
+    /* vchannel構造体の配列を作成。関数ポインタに値をセット */
+    if(vchflag == VCH_R){
         vch_head = calloc(vchnum, sizeof(struct vchannel_r));
-    else 
-         vch_head = calloc(vchnum, sizeof(struct vchannel_s));
+        frame_handler = frame_handler_r;
+    }
+    else{
+        vch_head = calloc(vchnum, sizeof(struct vchannel_s));
+        //frame_handler_s;
+    }
 
     if(vch_head == NULL){
         perror("calloc");

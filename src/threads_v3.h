@@ -4,6 +4,8 @@
 #include <linux/if_packet.h>
 #include <signal.h>
 
+extern void (* frame_handler)(struct tpacket3_hdr *ppd);
+
 void setup_threads_v3(void);
 void teardown_threads_v3(void);
 
