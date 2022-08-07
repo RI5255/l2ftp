@@ -31,7 +31,7 @@ int main(){
         printf("socket setup failed\n");
         return -1;
     }
-    err = activate_vchannel(VCH_S, 1000, "./taro/data/data");
+    err = activate_vchannel(VCH_S, 2, "./taro/data/data");
     teardown_socket();
     if(err == -1){
         return -1;

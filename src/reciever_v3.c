@@ -32,7 +32,7 @@ int main(){
         printf("socket setup failed\n");
         return -1;
     }
-    err = activate_vchannel(VCH_R, 1000, "./hanako/data/data");
+    err = activate_vchannel(VCH_R, 2, "./hanako/data/data");
     teardown_socket();
     if(err == -1){
         return -1;

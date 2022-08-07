@@ -79,6 +79,8 @@ void frame_handler_r(struct tpacket3_hdr *ppd){
     datalen = ppd->tp_snaplen - L2FTP_HDRLEN;
     fid = phdr->fid;
     segid = phdr->segid;
+
+    printf("Recieved fid: %u, segid: %u\n", fid, segid);
     pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * fid);
 
     /* 既に受信済みなら何もしない */
@@ -124,22 +126,24 @@ void *fdata_checker(void){
     struct vchannel_r *pvch;
     struct tpacket3_hdr *ppd;
     struct l2ftp_hdr *phdr;
-    unsigned int datalen = 0;
+    unsigned int lostnum;
 
     printf("[fdata_checker] I will stat a job\n");
     
     while(1){
-         /* deqしたfidの情報を保持するvchannelを取得 */
+        lostnum = 0; 
+        /* deqしたfidの情報を保持するvchannelを取得 */
         deq_fid(&fid_q, &fid);
         printf("[fdata_checker] checking fid: %u\n", fid);
         pvch = (struct vchannel_r*)(pvch_head + sizeof(struct vchannel_r) * fid);
-
+        
         /* ackを更新できるだけ更新 */
-        while(pvch->table[pvch->ack])
+        while(pvch->table[pvch->ack]){
             pvch->ack++;
+        }
         
         /* 全て受信完了していた場合　重複ファイルが作られる可能性は? */
-        if(pvch->ack == 69){
+        if(pvch->ack == FIN){
             if(save_fdata(fid) == -1){
                 printf("save file failed\n");
             }
@@ -156,11 +160,11 @@ void *fdata_checker(void){
                     continue;
                 }
                 *pdata = segid_req;
-                datalen++; pdata++; 
+                lostnum++; pdata++; 
             }
 
-            printf("[fdata_checker] checked %u, lostnum: %u sending request.\n", fid, datalen);
-            send_frame(ppd, datalen);
+            printf("[fdata_checker] lost detected fid: %u, lost: %u sending request.\n", fid, lostnum);
+            send_frame(ppd, lostnum);
         }
     }
     pthread_exit((void*)0);
@@ -179,24 +183,23 @@ void frame_handler_s(struct tpacket3_hdr *ppd){
     void *pdata;
     
     reqlen = ppd->tp_snaplen - L2FTP_HDRLEN;
-
     phdr = (struct l2ftp_hdr*)((uint8_t*)ppd + ppd->tp_mac);
     fid = phdr->fid;
+
+    printf("[frame_handler_s] recieved request fid: %u, reqlen: %lu\n", fid, reqlen);
+
     pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
 
     psegid_req = (uint8_t*)phdr + L2FTP_HDRLEN;
 
-    printf("data lost detected fid: %u, lost: %lu\n", fid, reqlen);
-
+    /* 要求されたidを再送 */
     for(; reqlen; reqlen--){
-        printf("%u", *psegid_req);
-
+        datalen = *psegid_req == 68 ? 400 : 1500;
         ppd2send = getfreeframe();
         phdr = (struct l2ftp_hdr*)((uint8_t*)ppd2send + OFF);
         pdata = build_l2ftp(phdr, fid, *psegid_req);
-        datalen = *psegid_req == 68 ? 400 : 1500;
         memcpy(pdata, (void*)(pvch->fdata + 1500 * *psegid_req), datalen);
-        send_frame(ppd, datalen);
+        send_frame(ppd2send, datalen);
         psegid_req++;
     }
 }
@@ -209,18 +212,17 @@ void * fdata_sender(void){
     struct vchannel_s *pvch;
     struct tpacket3_hdr *ppd2send;
     struct l2ftp_hdr *phdr;
-
+    void *pdata;
     printf("[fdata_sender] I will stat a job\n");
 
-    /* TODO ファイル数やidをハードコードしているので直す。numfidはvchannelが持つべき。*/
-    for(fid = 0; fid != 1000; fid++){
+    for(fid = 0; fid != vchnum; fid++){
         pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
-        for(segid = 0; segid != 69; segid++){
+        for(segid = 0; segid != FIN; segid++){
             datalen = segid == 68? 400 : 1500;
             ppd2send = getfreeframe();
             phdr = (struct l2ftp_hdr*)((uint8_t*)ppd2send + OFF);
-            build_l2ftp(phdr, fid, segid);
-            memcpy((void*)((uint8_t*)phdr + L2FTP_HDRLEN), (void*)(pvch->fdata + 1500 * segid), datalen);
+            pdata = build_l2ftp(phdr, fid, segid);
+            memcpy(pdata, (void*)(pvch->fdata + 1500 * segid), datalen);
             send_frame(ppd2send, datalen);
         }
         printf("[fdata_sender] sent data fid: %u\n", fid);
