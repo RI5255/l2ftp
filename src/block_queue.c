@@ -20,7 +20,7 @@ void enq_blk(struct block_queue *q, struct tpacket_block_desc *pbd){
     /* wait if queue is full */
     while(q->remain == BLOCK_QUEUE_SIZE) pthread_cond_wait(&q->not_full, &q->mutex);
     q->queue[q->wp] = pbd;
-    q->wp = ((q->wp + 1) & (BLOCK_QUEUE_SIZE -1));
+    q->wp = (q->wp  + 1) % BLOCK_QUEUE_SIZE;
     q->remain++;
     pthread_cond_signal(&q->not_empty);
     pthread_mutex_unlock(&q->mutex);
@@ -31,7 +31,7 @@ void deq_blk(struct block_queue *q, struct tpacket_block_desc** ppbd){
     /* wait if queue is empty */
     while(q->remain == 0) pthread_cond_wait(&q->not_empty, &q->mutex);
     *ppbd = q->queue[q->rp];
-    q->rp = ((q->rp + 1) & (BLOCK_QUEUE_SIZE -1));
+    q->rp = (q->rp  + 1) % BLOCK_QUEUE_SIZE;
     q->remain--;
     pthread_cond_signal(&q->not_full);
     pthread_mutex_unlock(&q->mutex);

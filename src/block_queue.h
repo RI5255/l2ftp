@@ -2,7 +2,7 @@
 #define _BLOCK_QUEUE_H
 
 #ifndef BLOCK_QUEUE_SIZE
-#define BLOCK_QUEUE_SIZE 32 
+#define BLOCK_QUEUE_SIZE 32
 #endif 
 
 #include <linux/if_packet.h>
