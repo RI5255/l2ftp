@@ -2,7 +2,7 @@
 rm data/*
 rm ../hanako/data/*
 rm check.md5
-for i in `seq 0 0`
+for i in `seq 0 999`
 do
     cat /dev/urandom | head -c 102400 > data/data$i
 done

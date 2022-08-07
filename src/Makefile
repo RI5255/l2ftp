@@ -1,8 +1,6 @@
 CC := gcc
 CFLAGS := -Wall -pthread -g
 
-sender: id_queue.c packet_queue.c global.c pktsock.c sender.c 
-reciever: id_queue.c packet_queue.c global.c pktsock.c reciever.c
-
+reciever_v3: tpacket_v3.c block_queue.c fid_queue.c vchannel.c l2ftp.c threads_v3.c reciever_v3.c
 clean: 
-	rm sender reciever 
+	rm reciever_v3 
