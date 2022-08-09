@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdint.h>
 #include <signal.h>
 #include <poll.h>
@@ -39,7 +40,7 @@ void * master(void){
     struct pollfd pfd;
     struct tpacket_stats_v3 status;
 
-    printf("[master] I will stat a job\n");
+    printf("[master] I will start a job\n");
 
     memset(&pfd, 0, sizeof(pfd));
     pfd.fd = sockfd;
@@ -104,7 +105,7 @@ void * blk_handler(void){
     struct tpacket_block_desc *pbd;
     struct tpacket3_hdr *ppd;
 
-    printf("[blok_handler_r] I will stat a job\n");
+    printf("[blok_handler_r] I will start a job\n");
     while(1){
         deq_blk(&blk_q, &pbd);
         num_pkts = pbd->hdr.bh1.num_pkts;
@@ -181,6 +182,8 @@ void frame_handler_s(struct tpacket3_hdr *ppd){
     struct vchannel_s *pvch;
     struct tpacket3_hdr *ppd2send;
     void *pdata;
+    int i;
+    unsigned int offs, head;
     
     reqlen = ppd->tp_snaplen - L2FTP_HDRLEN;
     phdr = (struct l2ftp_hdr*)((uint8_t*)ppd + ppd->tp_mac);
@@ -192,64 +195,57 @@ void frame_handler_s(struct tpacket3_hdr *ppd){
 
     psegid_req = (uint8_t*)phdr + L2FTP_HDRLEN;
 
+    offs = getfreeblock(reqlen);
+    head = offs;
+
     /* 要求されたidを再送 */
-    for(; reqlen; reqlen--){
+    for(i = 0 ; i < reqlen; i++){
+        ppd2send = (struct tpacket3_hdr*)(txring + ring.param.tframesiz * offs);
         datalen = *psegid_req == 68 ? 400 : 1500;
-        ppd2send = getfreeframe();
+        ppd2send -> tp_len = datalen + L2FTP_HDRLEN;
         phdr = (struct l2ftp_hdr*)((uint8_t*)ppd2send + OFF);
         pdata = build_l2ftp(phdr, fid, *psegid_req);
         memcpy(pdata, (void*)(pvch->fdata + 1500 * *psegid_req), datalen);
-        send_frame(ppd2send, datalen);
         psegid_req++;
+        offs = (offs + 1) % ring.param.tframenum;
     }
+    send_block(head, reqlen);
 }
 
 /* 指定されたfidのデータを全て送信する */
 static void send_all(uint16_t fid){
-    int i;
-    unsigned int datalen;
-    struct tpacket3_hdr *pbd, *ppd;
+    unsigned int i, offs, datalen, head;
+    struct tpacket3_hdr *ppd;
     struct vchannel_s *pvch;
     struct l2ftp_hdr *phdr;
     void *pdata;
+
     pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
-    pbd = getfreeblock(69);
+    offs = getfreeblock(69);
+    head = offs;
+
     for(i = 0; i < 69; i++){
-        ppd = (struct tpacket3_hdr *)((uint8_t*)pbd + ring.param.tframesiz * i);
+        ppd = (struct tpacket3_hdr *)(txring + ring.param.tframesiz * offs);
         datalen = i == 68? 400 : 1500;
         ppd -> tp_len = datalen + L2FTP_HDRLEN;
         phdr = (struct l2ftp_hdr*)((uint8_t*)ppd + OFF);
         pdata = build_l2ftp(phdr, fid, i);
         memcpy(pdata, (void*)(pvch->fdata + 1500 * i), datalen);
+        offs = (offs + 1) % ring.param.tframenum;
     }
-    send_block(pbd, 69);
+    send_block(head, 69);
 }
 
 /* ひたすらファイルデータを送り続ける */
 void * fdata_sender(void){
     uint16_t fid;
-    /*uint8_t segid;
-    size_t datalen;
-    struct vchannel_s *pvch;
-    struct tpacket3_hdr *ppd2send;
-    struct l2ftp_hdr *phdr;
-    void *pdata;*/
-    printf("[fdata_sender] I will stat a job\n");
+    unsigned int usec = 10000;
 
-    /*for(fid = 0; fid != vchnum; fid++){
-        pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
-        for(segid = 0; segid != FIN; segid++){
-            datalen = segid == 68? 400 : 1500;
-            ppd2send = getfreeframe();
-            phdr = (struct l2ftp_hdr*)((uint8_t*)ppd2send + OFF);
-            pdata = build_l2ftp(phdr, fid, segid);
-            memcpy(pdata, (void*)(pvch->fdata + 1500 * segid), datalen);
-            send_frame(ppd2send, datalen);
-        }
-        printf("[fdata_sender] sent data fid: %u\n", fid);
-    }*/
-    for(fid = 0; fid != vchnum; fid++){
+    printf("[fdata_sender] I will start a job\n");
+
+    for(fid = 0; fid < vchnum; fid++){
         send_all(fid);
+        usleep(usec);
         printf("[fdata_sender] sent data fid: %u\n", fid);
     }
     pthread_exit((void*)0);
