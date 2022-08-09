@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <poll.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <net/if.h>
 #include <arpa/inet.h>
@@ -20,6 +21,8 @@
 /* 内部データ */
 static unsigned int ringsiz;
 static uint8_t *rxring;
+static uint8_t *txring;
+static pthread_mutex_t tx_mutex;
 
 /* 公開データ */
 int sockfd;
@@ -57,7 +60,6 @@ static int bind_sock(int sockfd, const char* devname){
 int setup_socket(void){
     int err, i, v = TPACKET_V3;
     struct tpacket_req3 req;
-    uint8_t* txring;
 
     /* socketを作成 */
     sockfd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -95,14 +97,15 @@ int setup_socket(void){
         return -1;
     }
 
+    ring.param.tframenum = (ring.param.tblocksiz * ring.param.tblocknum) / ring.param.tframesiz;
+    ring.param.tframeperblock = ring.param.tblocksiz / ring.param.tframesiz;
+
     /* TX RINGを確保する準備 */
     memset(&req, 0, sizeof(req));
     req.tp_block_size = ring.param.tblocksiz;
     req.tp_frame_size = ring.param.tframesiz;
     req.tp_block_nr = ring.param.tblocknum;
-    req.tp_frame_nr = (ring.param.tblocksiz * ring.param.tblocknum) / ring.param.tframesiz;
-
-    ring.param.tframeperblock = ring.param.tblocksiz / ring.param.tframesiz;
+    req.tp_frame_nr = ring.param.tframenum;
 
     /* TX RINGを確保 */
     err = setsockopt(sockfd, SOL_PACKET, PACKET_TX_RING, &req, sizeof(req));
@@ -139,16 +142,8 @@ int setup_socket(void){
         ring.rb[i].iov_len = ring.param.rblocksiz;
     }
 
-    ring.tb = malloc(ring.param.tblocknum * sizeof(*ring.tb));
-    if(ring.tb == NULL){
-        perror("malloc");
-        return -1;
-    }
-    for(i = 0; i < ring.param.tblocknum; i++){
-        ring.tb[i].iov_base = txring + (i * ring.param.tblocksiz);
-        ring.tb[i].iov_len = ring.param.tblocksiz;
-    }
-
+    /* tx ring用のmutexを初期化 */
+    pthread_mutex_init(&tx_mutex, NULL);
     return 0;
 }
 
@@ -156,6 +151,7 @@ void teardown_socket(void){
     munmap(rxring, ringsiz);
     free(ring.rb);
     close(sockfd);
+    pthread_mutex_destroy(&tx_mutex);
 }
 
 /* RX RINGのblockをKERNELに戻す */
@@ -167,14 +163,15 @@ void flush_block(struct tpacket_block_desc *pbd){
 struct tpacket3_hdr * getfreeframe(void){
     struct tpacket3_hdr *ppd; 
     struct pollfd pfd;
-    static unsigned int blocknum, i;
+    static unsigned int tx_off = 0;
 
     memset(&pfd, 0, sizeof(pfd));
     pfd.fd = sockfd;
     pfd.events = POLLOUT;
     pfd.revents = 0;
+
     while(1){
-        ppd = (struct tpacket3_hdr*)((uint8_t*)ring.tb[blocknum].iov_base + ring.param.tframesiz * i);
+        ppd = (struct tpacket3_hdr*)(txring + ring.param.tframesiz * tx_off);
         if(ppd->tp_status != TP_STATUS_AVAILABLE){
             poll(&pfd, 1, -1);
             continue;
@@ -182,13 +179,42 @@ struct tpacket3_hdr * getfreeframe(void){
         break;
     }
     
-    i++;
-    if(i == ring.param.tframeperblock){
-        blocknum = (blocknum + 1) % ring.param.tblocknum;
-        i = 0;
-    }
+    tx_off = (tx_off + 1) % ring.param.tframenum;
 
     return ppd;    
+}
+
+/* TX RINGの空いているblockを返す すべてのframeが送信されたことを保証する必要があるな。先頭のframeしか確認してないから。*/
+struct tpacket3_hdr * getfreeblock(unsigned int num_frames){
+    struct tpacket3_hdr *pbd, *ppd; 
+    struct pollfd pfd;
+    unsigned int i =0, num = num_frames;
+    static unsigned int tx_offs = 0;
+
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = sockfd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+
+    printf("ring size: %u\n", ring.param.tframesiz);
+
+    pthread_mutex_lock(&tx_mutex);
+    pbd = (struct tpacket3_hdr*)(txring + ring.param.tframesiz * tx_offs);
+
+    while(num){
+        ppd = (struct tpacket3_hdr*)((uint8_t*)pbd + ring.param.tframesiz * i);
+        if(ppd -> tp_status != TP_STATUS_AVAILABLE){
+            poll(&pfd, 1, -1);
+            continue;
+        }
+        tx_offs = (tx_offs + 1) % ring.param.tframenum;
+        /* memo 77でとまる。実際*/
+        printf("off: %u\n", tx_offs);
+        i++; num--;
+    }
+    pthread_mutex_unlock(&tx_mutex);
+
+    return pbd;
 }
 
 /* 指定されたframeを送信する */
@@ -203,3 +229,30 @@ void send_frame(struct tpacket3_hdr* ppd, unsigned int datalen){
     }
     printf("sent %u bytes\n", err);
 }
+
+void send_block(struct tpacket3_hdr *pbd, unsigned int num_pkts){
+    int err, i;
+    struct tpacket3_hdr *ppd;
+    unsigned int nbytes = 0, nframes = 0, nerr = 0;
+    for(i = 0; i < num_pkts; i++){
+        ppd = (struct tpacket3_hdr*)((uint8_t*)pbd + ring.param.tframesiz * i);
+        ppd -> tp_status = TP_STATUS_SEND_REQUEST;
+    }
+
+    err = send(sockfd, NULL, 0, 0);
+
+    if(err == -1){
+        nerr++;
+    }
+
+    for(i = 0; i < num_pkts; i++){
+        ppd = (struct tpacket3_hdr*)((uint8_t*)pbd + ring.param.tframesiz * i);
+        if(ppd -> tp_status == TP_STATUS_AVAILABLE){
+            nframes ++;
+            nbytes += ppd->tp_len;
+        }
+    }    
+
+    printf("sent %u frames, %u err, data: %u bytes\n", nframes, nerr, nbytes);
+}
+

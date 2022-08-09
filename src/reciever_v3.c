@@ -13,7 +13,7 @@ static void sighandler(){
     struct tpacket_stats_v3 status;
     len = sizeof(status);
     err = getsockopt(sockfd, SOL_PACKET, PACKET_STATISTICS, &status, &len);
-    if (err < 0) {
+    if(err < 0){
         perror("getsockopt");
     }
     printf("Recieved: %u frames, %u dropped, freeze %u\n", status.tp_packets, status.tp_drops, status.tp_freeze_q_cnt);

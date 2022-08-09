@@ -204,18 +204,39 @@ void frame_handler_s(struct tpacket3_hdr *ppd){
     }
 }
 
+/* 指定されたfidのデータを全て送信する */
+static void send_all(uint16_t fid){
+    int i;
+    unsigned int datalen;
+    struct tpacket3_hdr *pbd, *ppd;
+    struct vchannel_s *pvch;
+    struct l2ftp_hdr *phdr;
+    void *pdata;
+    pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
+    pbd = getfreeblock(69);
+    for(i = 0; i < 69; i++){
+        ppd = (struct tpacket3_hdr *)((uint8_t*)pbd + ring.param.tframesiz * i);
+        datalen = i == 68? 400 : 1500;
+        ppd -> tp_len = datalen + L2FTP_HDRLEN;
+        phdr = (struct l2ftp_hdr*)((uint8_t*)ppd + OFF);
+        pdata = build_l2ftp(phdr, fid, i);
+        memcpy(pdata, (void*)(pvch->fdata + 1500 * i), datalen);
+    }
+    send_block(pbd, 69);
+}
+
 /* ひたすらファイルデータを送り続ける */
 void * fdata_sender(void){
     uint16_t fid;
-    uint8_t segid;
+    /*uint8_t segid;
     size_t datalen;
     struct vchannel_s *pvch;
     struct tpacket3_hdr *ppd2send;
     struct l2ftp_hdr *phdr;
-    void *pdata;
+    void *pdata;*/
     printf("[fdata_sender] I will stat a job\n");
 
-    for(fid = 0; fid != vchnum; fid++){
+    /*for(fid = 0; fid != vchnum; fid++){
         pvch = (struct vchannel_s*)(pvch_head + sizeof(struct vchannel_s) * fid);
         for(segid = 0; segid != FIN; segid++){
             datalen = segid == 68? 400 : 1500;
@@ -225,6 +246,10 @@ void * fdata_sender(void){
             memcpy(pdata, (void*)(pvch->fdata + 1500 * segid), datalen);
             send_frame(ppd2send, datalen);
         }
+        printf("[fdata_sender] sent data fid: %u\n", fid);
+    }*/
+    for(fid = 0; fid != vchnum; fid++){
+        send_all(fid);
         printf("[fdata_sender] sent data fid: %u\n", fid);
     }
     pthread_exit((void*)0);
