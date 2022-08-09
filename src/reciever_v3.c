@@ -1,5 +1,6 @@
 #include "tpacket_v3.h"
 #include "vchannel.h"
+#include "l2ftp.h"
 #include <stdio.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -7,26 +8,11 @@
 #include <unistd.h>
 #include <stdlib.h>
 
-static void sighandler(){
-    int err;
-    socklen_t len;
-    struct tpacket_stats_v3 status;
-    len = sizeof(status);
-    err = getsockopt(sockfd, SOL_PACKET, PACKET_STATISTICS, &status, &len);
-    if(err < 0){
-        perror("getsockopt");
-    }
-    printf("Recieved: %u frames, %u dropped, freeze %u\n", status.tp_packets, status.tp_drops, status.tp_freeze_q_cnt);
-    close(sockfd);
-    exit(0);
-}
-
-
+/* 本番環境で使う際はl2ftp_setupを呼ぶ。*/
 int main(){
     int err;
-    signal(SIGINT, sighandler);
     /* ringにparameterを設定してからsetup_socketを呼ぶ */
-    ring.param.rblocksiz = 143360; ring.param.rframesiz = 2048; ring.param.rblocknum = 64;
+    ring.param.rblocksiz = 143360; ring.param.rframesiz = 2048; ring.param.rblocknum = 36;
     ring.param.tblocksiz = 8192; ring.param.tframesiz = 128; ring.param.tblocknum = 2; 
     if(setup_socket() == -1){
         printf("socket setup failed\n");
