@@ -255,6 +255,6 @@ void send_block(unsigned int offs, unsigned int num_pkts){
         }
     }    
 
-    printf("sent %u frames, %u err, data: %u bytes\n", nframes, nerr, nbytes);
+    //printf("sent %u frames, %u err, data: %u bytes\n", nframes, nerr, nbytes);
 }
 

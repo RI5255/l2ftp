@@ -27,7 +27,7 @@ char fpath_base[20];
 /* 内部データ */
 static sig_atomic_t running = 1;
 static void (* frame_handler)(struct tpacket3_hdr *ppd);
-static void* (* worker)(void);
+static void (* worker)(void);
 
 void sigterm(int num){
     running = 0;

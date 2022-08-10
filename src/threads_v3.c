@@ -56,7 +56,7 @@ static int save_fdata(uint16_t fid){
 }
 
 /* ファイルデータの抜けを調べて要求。全て受信完了したらファイルに保存して終了 */
-void * fdata_checker(void){
+void fdata_checker(void){
     uint8_t segid_req, *pdata;
     uint16_t fid;
     struct vchannel_r *pvch;
@@ -130,16 +130,20 @@ static void send_all(uint16_t fid){
 }
 
 /* ひたすらファイルデータを送り続ける */
-void * fdata_sender(void){
+void fdata_sender(void){
     uint16_t fid;
     unsigned int usec = 15000;
 
     printf("[fdata_sender] I will start a job\n");
 
-    for(fid = 0; fid < vchnum; fid++){
-        send_all(fid);
-        usleep(usec);
-        printf("[fdata_sender] sent data fid: %u\n", fid);
+    while(1){
+        for(fid = 0; fid < vchnum; fid++){
+            send_all(fid);
+            usleep(usec);
+            printf("[fdata_sender] sent data fid: %u\n", fid);
+        }
     }
+
+    /* ここには到達しない */
     pthread_exit((void*)0);
 }

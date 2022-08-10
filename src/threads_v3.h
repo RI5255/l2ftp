@@ -6,7 +6,7 @@
 
 void setup_threads_v3(void);
 void teardown_threads_v3(void);
-void * fdata_checker(void);
-void * fdata_sender(void);
+void fdata_checker(void);
+void fdata_sender(void);
 
 #endif 

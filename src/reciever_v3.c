@@ -12,7 +12,7 @@
 int main(){
     int err;
     /* ringにparameterを設定してからsetup_socketを呼ぶ */
-    ring.param.rblocksiz = 143360; ring.param.rframesiz = 2048; ring.param.rblocknum = 36;
+    ring.param.rblocksiz = 143360; ring.param.rframesiz = 2048; ring.param.rblocknum = 64;
     ring.param.tblocksiz = 8192; ring.param.tframesiz = 128; ring.param.tblocknum = 2; 
     if(setup_socket() == -1){
         printf("socket setup failed\n");
