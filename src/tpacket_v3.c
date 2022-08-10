@@ -155,7 +155,7 @@ void teardown_socket(void){
 /* RX RINGのblockをKERNELに戻す */
 void flush_block(struct tpacket_block_desc *pbd){
     pbd->hdr.bh1.block_status = TP_STATUS_KERNEL;
-    printf("flushed\n");
+    //printf("flushed\n");
 }
 
 /* TX RINGの空いているframeを返す */
@@ -224,7 +224,6 @@ void send_frame(struct tpacket3_hdr* ppd, unsigned int datalen){
     if(err == -1){
         perror("send");
     }
-    printf("sent %u bytes\n", err);
 }
 
 /* 指定されたoffsetから、指定された数のframeを送信 */

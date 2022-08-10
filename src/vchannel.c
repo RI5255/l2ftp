@@ -185,16 +185,18 @@ static void frame_handler_r(struct tpacket3_hdr *ppd){
 
     /* 既に受信済みなら何もしない */
     if(pvch->table[segid]){
-        return;
+        goto end;
     }
 
     /* データをコピーして受信完了をマーク */
     memcpy((void*)(pvch->fdata + 1500 * segid), (void*)((uint8_t*)phdr + L2FTP_HDRLEN), datalen);
     pvch->table[segid] = RECIEVED;
 
+    end: 
     /* fidがfid_recentとは異なっていたら別のchannelに対する通信に切り替わったことが分かる。 */
     if(fid != fid_recent){
         enq_fid(&fid_q, fid_recent);
+        printf("enq: %u\n", fid_recent);
         fid_recent = fid;
     }
 }

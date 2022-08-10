@@ -140,7 +140,7 @@ void fdata_sender(void){
         for(fid = 0; fid < vchnum; fid++){
             send_all(fid);
             usleep(usec);
-            printf("[fdata_sender] sent data fid: %u\n", fid);
+            //printf("[fdata_sender] sent data fid: %u\n", fid);
         }
     }
 
